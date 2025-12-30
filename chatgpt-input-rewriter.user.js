@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         chatgpt-input-rewriter
 // @namespace    https://mimiron.se/chatgpt-input-rewriter
-// @version      0.4.2
+// @version      0.5.0
 // @description  Submit-time prompt rewrite via fetch interception with editable macro UI
 // @author       Mårten Larsson
 // @match        https://chatgpt.com/*
@@ -12,7 +12,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '0.4.2';
+  const VERSION = '0.5.0';
   const LOG_PREFIX = `[chatgpt-input-rewriter v${VERSION}]`;
   const MACROS_KEY = 'chatgpt-input-rewriter.macros';
 
@@ -24,12 +24,14 @@
 
   const EXAMPLE_JSON = `{
   // Example macros
-  // Syntax: "<macro> <arg>"
-  // Use {{arg}} as placeholder for everything after the macro name
+  // Syntax: "<macro> arg1 arg2 ..."
+  // Placeholders:
+  //   {{1}}, {{2}}, ... = positional args
+  //   {{*}} or {{arg}} = all args joined by space
 
-  "aiu": "Update {{arg}} and emit the full file.",
-  "ex":  "Explain {{arg}} step by step, including reasoning.",
-  "gen": "Generate {{arg}} as a concrete, copy-pasteable artifact."
+  "aiu": "Update {{1}} in {{2}} and emit the full file.",
+  "ex":  "Explain {{*}} step by step, including reasoning.",
+  "gen": "Generate {{1}} using {{2}} with options: {{*}}"
 }`;
 
   function loadMacros() {
@@ -44,27 +46,38 @@
   }
 
   /* ---------------------------------------------------------
-   * Rewrite logic
+   * Rewrite logic (positional args)
    * --------------------------------------------------------- */
 
   function rewritePrompt(original, macros) {
     if (typeof original !== 'string' || !macros) return original;
 
     const trimmed = original.trim();
-    const firstSpace = trimmed.indexOf(' ');
+    const parts = trimmed.split(/\s+/);
+    if (parts.length === 0) return original;
 
-    const macro = firstSpace === -1
-      ? trimmed
-      : trimmed.slice(0, firstSpace);
-
-    const arg = firstSpace === -1
-      ? ''
-      : trimmed.slice(firstSpace + 1);
+    const macro = parts[0];
+    const args = parts.slice(1);
 
     const expansion = macros[macro];
     if (typeof expansion !== 'string') return original;
 
-    return expansion.replace('{{arg}}', arg);
+    let rewritten = expansion;
+
+    // {{1}}, {{2}}, ...
+    args.forEach((arg, idx) => {
+      const re = new RegExp(`\\{\\{${idx + 1}\\}\\}`, 'g');
+      rewritten = rewritten.replace(re, arg);
+    });
+
+    const allArgs = args.join(' ');
+
+    // {{*}} and {{arg}}
+    rewritten = rewritten
+      .replace(/\{\{\*\}\}/g, allArgs)
+      .replace(/\{\{arg\}\}/g, allArgs);
+
+    return rewritten;
   }
 
   /* ---------------------------------------------------------
@@ -110,7 +123,7 @@
   };
 
   /* ---------------------------------------------------------
-   * UI: Edit Macros Modal
+   * UI: Edit Macros Modal (unchanged)
    * --------------------------------------------------------- */
 
   function createButton() {
@@ -153,7 +166,6 @@
     modal.style.flexDirection = 'column';
     modal.style.fontFamily = 'monospace';
 
-    /* ---- syntax highlight CSS ---- */
     const style = document.createElement('style');
     style.textContent = `
       .cir-key  { color: #9cdcfe; }
@@ -171,7 +183,6 @@
     const pre = document.createElement('pre');
     const ta = document.createElement('textarea');
 
-    /* ---- identical metrics (CRITICAL) ---- */
     const font = '13px monospace';
     const lineHeight = '18px';
     const padding = '8px';
@@ -206,9 +217,7 @@
         .replace(/>/g, '&gt;');
 
       pre.innerHTML = escaped
-        // strings first
         .replace(/"(.*?)"/g, '<span class="cir-str">"$1"</span>')
-        // then keys
         .replace(
           /<span class="cir-str">"(.*?)"<\/span>:/g,
           '<span class="cir-key">"$1"</span>:'
